@@ -6,6 +6,7 @@ from src.util.utils import to_string_label, get_last_checkpoint
 import os
 import logging
 
+from pprint import pprint
 #Model class.
 #Implements a 3-layer CNN with RELU activation and dropout.
 #Kernel size and dropout value are customizable through an YML configuration file
@@ -15,8 +16,11 @@ class CNN:
         self.model = self.build_model()
 
     def predict(self, image):
-        prediction = self.model.predict_classes(image, self.config['batch_size'])[0, 0]
-        return to_string_label(prediction, self.config['label_strings'])
+        #prediction = self.model.predict_classes(image, self.config['batch_size'])[0, 0]
+        prediction = self.model.predict(image, self.config['batch_size'])[0,0]
+        return prediction
+
+        #return to_string_label(prediction, self.config['label_strings'])
 
     def save_weights(self, epoch=-1):
         path = os.path.join(self.config['checkpoint_dir'], "model_weights_epoch_%d.hdf5" % epoch)
