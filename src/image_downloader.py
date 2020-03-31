@@ -153,6 +153,25 @@ def insertLabelsIntoDB(img_labels):
   toc = time.perf_counter()
   print(f"Inserted Labels To DB in {toc - tic:0.4f} seconds")
 
+
+def insertLabelsIntoDB(img_labels):
+  tic = time.perf_counter()
+  sql = """INSERT into insta_image_labels(label) VALUES(%s) 
+  ON CONFLICT DO NOTHING;"""
+  #ON CONSTRAINT inx_unq_label_parent
+  for label in img_labels:
+    label_name = label["Name"]
+
+    for parent_label in label["Parents"]:
+      parent_label_name = parent_label["Name"]
+      cursor.execute(sql, (label_name,))
+      cursor.execute(sql, (parent_label_name,))
+
+  connection.commit()
+  toc = time.perf_counter()
+  print(f"Inserted Labels To DB in {toc - tic:0.4f} seconds")
+
+
 def processLabels(img_file, img_labels):
 
   match = {}
@@ -231,7 +250,7 @@ def getImages(city,county,state,insta_code,page_key=''):
           """Run Sampler"""
           smp = randint(1,100)
           if smp < SAMPLE_SIZE:
-            
+
             """Run ML to detect Labels"""
             img_labels = detect_labels_local_file(img_file)
 
