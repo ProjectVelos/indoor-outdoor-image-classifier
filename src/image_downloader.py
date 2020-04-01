@@ -11,14 +11,14 @@ import time
 #TZ = pytz.timezone('America/Los_Angeles')
 import hashlib
 import os
-import boto3
+
 import sys
 from random import randint
-#from src.util.config import load_configuration
-#from src.util.utils import get_last_checkpoint, load_image
-#from src.model import CNN_model
+from velos_image_classifier import VelosImageClassifier
 
-#from src.velos_outdoor_predictor import VelosOutoorPredictor
+classifier = VelosImageClassifier()
+
+
 
 DATABASE_NAME='uscovidwatch'
 DATABASE_USER='uscovid'
@@ -39,10 +39,9 @@ cursor = connection.cursor()
 STEVIES_TOKEN = '2246052b-b228-467c-ac8b-11c71e6e4fd1'
 STEVIES_ENDPOINT = 'https://stevesie.com/cloud/api/v1/endpoints/68cf504a-dea3-4114-a62e-020299915e8e/executions'
 #IMG_NUMBER = 0
-BASE_DIR = "/Users/jim/Devel/velos_image/app/indoor-outdoor-image-classifier/test_images/"
+BASE_DIR = "/home/jim/Devel/indoor-outdoor-image-classifier/test_images/"
 
-BOTO_CLIENT = boto3.client('rekognition')
-#VM = VelosOutoorPredictor()
+classifier = VelosImageClassifier()
 
 def getDir(city,county,state):
   global BASE_DIR
@@ -59,10 +58,9 @@ def getDir(city,county,state):
 """
 Download Image to Proper Directory
 """
-def downloadImage(img_url,city,county,state,img_date):
+def downloadImage(img_url,img_hash,city,county,state,img_date):
 
   img_dir = getDir(city,county,state)
-  img_hash = hashlib.md5(img_url.encode('UTF')).hexdigest()
 
   img_file = img_dir + str(img_date) + "-" + img_hash
   img_file = img_file + ".jpg"
@@ -79,16 +77,6 @@ def downloadImage(img_url,city,county,state,img_date):
     print(f"Downloaded file in {toc - tic:0.4f} seconds")
     return img_file
 
-"""
-Run AWS Rekognize on Image
-"""
-def detect_labels_local_file(img_file):
-  tic = time.perf_counter()
-  with open(img_file, 'rb') as image:
-    response = BOTO_CLIENT.detect_labels(Image={'Bytes': image.read()})
-  toc = time.perf_counter()
-  print(f"Ran ML in {toc - tic:0.4f} seconds")
-  return response['Labels']
 
 """
 Ensure Image Time is Within our Window
@@ -99,102 +87,48 @@ def _checkImageTime(img_timestamp):
   if hours_ago > MAX_HOURS_TO_DOWNLOAD:
     return False
 
-  img_date = time.strftime("%d_%b_%Y", time.gmtime(img_timestamp))
+  img_date = time.strftime("%Y-%m-%d", time.gmtime(img_timestamp))
   return img_date
 
-"""
-Insert properly categorized images into the db
-"""
-def insertCategorizedImageIntoDB(city, county, state, insta_code, img_url, img_file, label_name, label_confidence, label_parent, img_date):
+
+
+def insertResults(img_date,img_hash,city,county,state,insta_code,img_url,img_file,img_classification):
   tic = time.perf_counter()
-  sql = """INSERT into insta_images_categorized(city,county,state,insta_location_code,img_url,img_file,
-  label_name,label_confidence,label_parent,img_date) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING;
-  """
-  cursor.execute(sql, (city,county,state,insta_code,img_url,img_file,label_name,label_confidence,label_parent,img_date,))
-  connection.commit()
-  toc = time.perf_counter()
-  print(f"Inserted Categorized Image To DB in {toc - tic:0.4f} seconds")
 
-"""
-Insert uncategorized images into the db
-"""
-def insertUncategorizedImageIntoDB(city,county,state,insta_code,img_url,img_file,img_labels,img_date):
-  tic = time.perf_counter()
-  sql = """INSERT into insta_images_uncategorized(city,county,state,insta_location_code,img_url,img_file,
-  label_name,label_confidence,label_parent,img_date) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING;
-  """
+  """ Insert Image Scene (Outdoors or Indoors)"""
 
-  for label in img_labels:
-    label_name = label["Name"]
-    label_confidence = label["Confidence"]
-    for parent_label in label["Parents"]:
-      parent_label_name = parent_label["Name"]
-      cursor.execute(sql, (city,county,state,insta_code,img_url,img_file,label_name,label_confidence,parent_label_name,img_date,))
-
-  connection.commit()
-  toc = time.perf_counter()
-  print(f"Inserted UN-Categorized Image To DB in {toc - tic:0.4f} seconds")
-
-"""
-Insert all labels into the DB so we can train our own model soon
-"""
-def insertLabelsIntoDB(img_labels):
-  tic = time.perf_counter()
-  sql = """INSERT into insta_image_labels(label,parent_label) VALUES(%s,%s) 
+  scene = img_classification["location"]
+  sql = """INSERT into insta_images(img_date,img_hash,city,county,state,insta_location_code,img_url,img_file,scene) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) 
   ON CONFLICT DO NOTHING;"""
-  #ON CONSTRAINT inx_unq_label_parent
-  for label in img_labels:
-    label_name = label["Name"]
-
-    for parent_label in label["Parents"]:
-      parent_label_name = parent_label["Name"]
-      cursor.execute(sql, (label_name, parent_label_name,))
-  connection.commit()
-  toc = time.perf_counter()
-  print(f"Inserted Labels To DB in {toc - tic:0.4f} seconds")
 
 
-def insertLabelsIntoDB(img_labels):
-  tic = time.perf_counter()
-  sql = """INSERT into insta_image_labels(label) VALUES(%s) 
+  cursor.execute(sql, (img_date,img_hash,city,county,state,insta_code,img_url,img_file,scene,))
+  #connection.commit()
+  #toc = time.perf_counter()
+  #print(f"Inserted Labels To DB in {toc - tic:0.4f} seconds")
+
+  """ Insert Image Categories and Precision"""
+
+  sql = """INSERT into insta_image_category(img_hash,img_category,probability) VALUES(%s,%s,%s) 
   ON CONFLICT DO NOTHING;"""
-  #ON CONSTRAINT inx_unq_label_parent
-  for label in img_labels:
-    label_name = label["Name"]
 
-    for parent_label in label["Parents"]:
-      parent_label_name = parent_label["Name"]
-      cursor.execute(sql, (label_name,))
-      cursor.execute(sql, (parent_label_name,))
+  for cat in img_classification["categories"]:
+    category = cat["category"]
+    probability = float(cat["probability"])
+
+    cursor.execute(sql, (img_hash,category, probability,))
+    #connection.commit()
+
+  sql = """INSERT into insta_image_attribute(img_hash,img_attribute) VALUES(%s,%s) 
+  ON CONFLICT DO NOTHING;"""
+
+  for attribute in img_classification["attributes"]:
+    cursor.execute(sql, (img_hash,attribute,))
+    #connection.commit()
 
   connection.commit()
   toc = time.perf_counter()
-  print(f"Inserted Labels To DB in {toc - tic:0.4f} seconds")
-
-
-def processLabels(img_file, img_labels):
-
-  match = {}
-  for label in img_labels:
-    if label['Name'] == 'Outdoors' or label['Name'] == 'Indoors':
-      print("{} FROM NAME".format(label['Name']), img_file)
-      match['label'] = label['Name']
-      match['confidence'] = label['Confidence']
-      match['parent'] = None
-      return match
-
-
-    for parent in label["Parents"]:
-      if parent["Name"] == 'Outdoors' or parent["Name"] == 'Indoors':
-        print("{} FROM PARENT".format(parent["Name"]), img_file)
-        match['label'] = label['Name']
-        match['confidence'] = label['Confidence']
-        match['parent'] = str(parent["Name"])
-
-        return match
-
-  return False
-
+  print(f"Inserted Image To DB in {toc - tic:0.4f} seconds")
 
 
 
@@ -238,44 +172,27 @@ def getImages(city,county,state,insta_code,page_key=''):
       img_url = result["node"]["display_url"].strip("'")
       img_timestamp  = result["node"]["taken_at_timestamp"]
       img_id = result["node"]["id"]
+      img_hash = hashlib.md5(img_url.encode('UTF')).hexdigest()
+
 
       """Check image time to ensure we are within our time window"""
       img_date = _checkImageTime(img_timestamp)
       if img_date != False:
 
         """Download Image"""
-        img_file = downloadImage(img_url,city,county,state,img_date)
+        img_file= downloadImage(img_url,img_hash,city,county,state,img_date)
         if img_file != False:
 
-          """Run Sampler"""
-          smp = randint(1,100)
-          if smp < SAMPLE_SIZE:
+          #"""Run Sampler"""
+          #smp = randint(1,100)
+          #if smp < SAMPLE_SIZE:
 
-            """Run ML to detect Labels"""
-            img_labels = detect_labels_local_file(img_file)
+          """Run ML to detect Labels"""
+          img_classification = classifier.classify_file(img_file)
 
-            """Insert Labels Into DB"""
-            insertLabelsIntoDB(img_labels)
-
-            """Insert All """
-
-            """Process Labels To Detect Indoor/Outdoor"""
-            label = processLabels(img_file,img_labels)
-
-
-            """If image has been categorized as indoor/outdoor insert it into the image table"""
-            if label != False:
-              pprint(label)
-              label_name = label["label"]
-              label_confidence = label["confidence"]
-              label_parent = label["parent"]
-              insertCategorizedImageIntoDB(city,county,state,insta_code,img_url,img_file,label_name,label_confidence,label_parent,img_date)
-
-            else:
-              """If image has not been categorized store it and all its labels for future categorization"""
-
-              insertUncategorizedImageIntoDB(city,county,state,insta_code,img_url,img_file,img_labels,img_date)
-
+          """Insert results Into DB"""
+          insertResults(img_date,img_hash,city,county,state,insta_code,img_url,img_file,img_classification)
+  
 
       else:
         continue_paging = False
